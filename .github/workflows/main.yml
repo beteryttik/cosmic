@@ -17,7 +17,6 @@ jobs:
 
       - name: Find and unzip project archive
         run: |
-          # Ищем первый zip-файл в корне репозитория (наша загруженная зипка)
           ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
@@ -26,13 +25,8 @@ jobs:
           fi
 
           echo "Найден архив: $ZIP_FILE — распаковываю в корень проекта..."
-
-          # Распаковываем поверх рабочей директории, перезаписывая всё
-          # (папка .github уже существует из checkout, поэтому -o для перезаписи)
           unzip -o "$ZIP_FILE"
 
-          # Если в архиве был вложенный каталог (например cosmic/), переносим содержимое
-          # в корень, чтобы build.yml, build.gradle и src/ лежали на верхнем уровне
           if [ ! -f "./build.gradle" ]; then
             for dir in */; do
               if [ -f "./${dir}build.gradle" ]; then
@@ -44,7 +38,6 @@ jobs:
             done
           fi
 
-          # Проверка, что распаковка прошла успешно
           if [ ! -f "./build.gradle" ]; then
             echo "Ошибка: после распаковки не найден build.gradle!"
             exit 1
@@ -52,6 +45,96 @@ jobs:
 
           echo "Проект распакован. Содержимое корня:"
           ls -la
+
+      - name: Patch gradle files (fixed dependencies)
+        run: |
+          echo "Перезаписываю gradle.properties на исправленную версию..."
+          cat > gradle.properties << 'EOF'
+          org.gradle.jvmargs=-Xmx3G
+          org.gradle.daemon=false
+
+          minecraft_version=1.20.1
+          forge_version=47.3.0
+          mapping_channel=official
+          mapping_version=1.20.1
+
+          mod_id=cosmic
+          mod_name=Cosmic
+          mod_version=0.1.0
+          mod_group_id=com.klyzz.cosmic
+          mod_authors=klyzz
+          mod_description=Industrial hardcore space simulator mod.
+
+          geckolib_version=4.4.4
+          flywheel_version=0.6.11-12
+          jei_version=15.2.0.27
+          create_curse_file_id=5688638
+          curios_curse_file_id=4985525
+          EOF
+
+          echo "Перезаписываю блоки repositories и dependencies в build.gradle..."
+          python3 - << 'PYEOF'
+          import re
+
+          with open('build.gradle', 'r') as f:
+              content = f.read()
+
+          # Новый блок repositories
+          new_repos = '''
+          repositories {
+              maven {
+                  name = 'ModMaven'
+                  url = 'https://modmaven.dev/'
+                  content { includeGroup 'com.simibubi.create'; includeGroup 'com.jozufozu.flywheel' }
+              }
+              maven {
+                  name = 'BlameJared'
+                  url = 'https://maven.blamejared.com/'
+              }
+              maven {
+                  name = 'CurseMaven'
+                  url = 'https://cursemaven.com'
+                  content { includeGroup 'curse.maven' }
+              }
+              maven {
+                  name = 'GeckoLib'
+                  url = 'https://dl.cloudsmith.io/public/geckolib3/geckolib/maven/'
+                  content { includeGroupByRegex 'software\\\\.bernie.*'; includeGroup 'com.eliotlash.mclib' }
+              }
+          }
+          '''
+
+          # Новый блок dependencies
+          new_deps = '''
+          dependencies {
+              minecraft "net.minecraftforge:forge:${minecraft_version}-${forge_version}"
+
+              implementation fg.deobf("software.bernie.geckolib:geckolib-forge-${minecraft_version}:${geckolib_version}")
+              implementation fg.deobf("com.eliotlash.mclib:mclib:20")
+
+              implementation fg.deobf("com.jozufozu.flywheel:flywheel-forge-${minecraft_version}:${flywheel_version}")
+
+              implementation fg.deobf("curse.maven:create-328085:${create_curse_file_id}")
+              implementation fg.deobf("curse.maven:curios-309927:${curios_curse_file_id}")
+
+              implementation fg.deobf("mezz.jei:jei-${minecraft_version}-common-api:${jei_version}")
+              implementation fg.deobf("mezz.jei:jei-${minecraft_version}-forge:${jei_version}")
+          }
+          '''
+
+          # Заменяем блок repositories (от слова repositories { до первой закрывающей })
+          content = re.sub(r'\nrepositories\s*\{.*?\n\}\n', new_repos, content, flags=re.DOTALL, count=1)
+          # Заменяем блок dependencies
+          content = re.sub(r'\ndependencies\s*\{.*?\n\}\n', new_deps, content, flags=re.DOTALL, count=1)
+
+          with open('build.gradle', 'w') as f:
+              f.write(content)
+
+          print("build.gradle пропатчен!")
+          PYEOF
+
+          echo "Итоговый build.gradle (блок зависимостей):"
+          grep -A 20 '^dependencies' build.gradle
 
       - name: Set up JDK 17 (Temurin)
         uses: actions/setup-java@v4
