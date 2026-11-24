@@ -1,0 +1,93 @@
+name: Build Cosmic Mod
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Find and unzip project archive
+        run: |
+          # Ищем первый zip-файл в корне репозитория (наша загруженная зипка)
+          ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "Ошибка: zip-архив проекта не найден в корне репозитория!"
+            exit 1
+          fi
+
+          echo "Найден архив: $ZIP_FILE — распаковываю в корень проекта..."
+
+          # Распаковываем поверх рабочей директории, перезаписывая всё
+          # (папка .github уже существует из checkout, поэтому -o для перезаписи)
+          unzip -o "$ZIP_FILE"
+
+          # Если в архиве был вложенный каталог (например cosmic/), переносим содержимое
+          # в корень, чтобы build.yml, build.gradle и src/ лежали на верхнем уровне
+          if [ ! -f "./build.gradle" ]; then
+            for dir in */; do
+              if [ -f "./${dir}build.gradle" ]; then
+                echo "Проект вложен в каталог ${dir} — перемещаю на уровень выше..."
+                mv "${dir}"* .
+                rmdir "${dir}"
+                break
+              fi
+            done
+          fi
+
+          # Проверка, что распаковка прошла успешно
+          if [ ! -f "./build.gradle" ]; then
+            echo "Ошибка: после распаковки не найден build.gradle!"
+            exit 1
+          fi
+
+          echo "Проект распакован. Содержимое корня:"
+          ls -la
+
+      - name: Set up JDK 17 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Cache Gradle packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('*.gradle', 'gradle.properties') }}
+          restore-keys: ${{ runner.os }}-gradle-
+
+      - name: Generate Gradle wrapper if missing
+        run: |
+          if [ ! -f "gradle/wrapper/gradle-wrapper.jar" ]; then
+            echo "Wrapper не найден — устанавливаю Gradle 8.4 и генерирую..."
+            sudo apt-get update -y
+            sudo apt-get install -y unzip wget
+            wget https://services.gradle.org/distributions/gradle-8.4-bin.zip -O /tmp/gradle.zip
+            unzip -q /tmp/gradle.zip -d /opt
+            /opt/gradle-8.4/bin/gradle wrapper --gradle-version 8.4
+          fi
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build with Gradle
+        run: ./gradlew build --no-daemon
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cosmic-mod-build
+          path: build/libs/cosmic-*.jar
+          if-no-files-found: error
