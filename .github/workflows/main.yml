@@ -29,10 +29,11 @@ jobs:
 
           if [ ! -f "./build.gradle" ]; then
             for dir in */; do
-              if [ -f "./${dir}build.gradle" ]; then
+              if [ -f "./${dir}build.gradle" ] || [ -d "./${dir}src" ]; then
                 echo "Проект вложен в каталог ${dir} — перемещаю на уровень выше..."
-                mv "${dir}"* .
-                rmdir "${dir}"
+                mv "${dir}"* . 2>/dev/null || true
+                mv "${dir}".github . 2>/dev/null || true
+                rmdir "${dir}" 2>/dev/null || true
                 break
               fi
             done
@@ -46,7 +47,7 @@ jobs:
           echo "Проект распакован. Содержимое корня:"
           ls -la
 
-      - name: Overwrite gradle.properties with fixed version
+      - name: Overwrite gradle.properties
         run: |
           cat > gradle.properties << 'EOF'
           org.gradle.jvmargs=-Xmx3G
@@ -73,7 +74,7 @@ jobs:
           echo "gradle.properties перезаписан."
           cat gradle.properties
 
-      - name: Overwrite build.gradle with fixed repos & deps
+      - name: Overwrite build.gradle
         run: |
           cat > build.gradle << 'EOF'
           plugins {
@@ -86,10 +87,6 @@ jobs:
           group = "${mod_group_id}"
 
           java.toolchain.languageVersion = JavaLanguageVersion.of(17)
-
-          println('Java: ' + System.getProperty('java.version'))
-          println('Gradle: ' + gradle.gradleVersion)
-          println('Forge: ' + forge_version)
 
           minecraft {
               mappings channel: "${mapping_channel}", version: "${mapping_version}"
@@ -174,6 +171,92 @@ jobs:
           echo "build.gradle перезаписан."
           grep -A 12 '^dependencies' build.gradle
 
+      - name: Overwrite Java sources (compile fix)
+        run: |
+          mkdir -p src/main/java/com/klyzz/cosmic/registry
+
+          cat > src/main/java/com/klyzz/cosmic/CosmicMod.java << 'EOF'
+          package com.klyzz.cosmic;
+
+          import com.klyzz.cosmic.registry.ModCreativeTabs;
+          import net.minecraftforge.eventbus.api.IEventBus;
+          import net.minecraftforge.fml.common.Mod;
+          import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
+
+          @Mod(CosmicMod.MODID)
+          public class CosmicMod {
+
+              public static final String MODID = "cosmic";
+
+              public CosmicMod() {
+                  IEventBus modBus = FMLJavaModLoadingContext.get().getModEventBus();
+                  ModCreativeTabs.register(modBus);
+              }
+          }
+          EOF
+
+          cat > src/main/java/com/klyzz/cosmic/registry/ModCreativeTabs.java << 'EOF'
+          package com.klyzz.cosmic.registry;
+
+          import com.klyzz.cosmic.CosmicMod;
+          import net.minecraft.core.registries.Registries;
+          import net.minecraft.network.chat.Component;
+          import net.minecraft.world.item.CreativeModeTab;
+          import net.minecraft.world.item.ItemStack;
+          import net.minecraft.world.item.Items;
+          import net.minecraftforge.eventbus.api.IEventBus;
+          import net.minecraftforge.registries.DeferredRegister;
+          import net.minecraftforge.registries.RegistryObject;
+
+          public class ModCreativeTabs {
+
+              public static final DeferredRegister<CreativeModeTab> TABS =
+                      DeferredRegister.create(Registries.CREATIVE_MODE_TAB, CosmicMod.MODID);
+
+              public static final RegistryObject<CreativeModeTab> RESOURCES_TAB =
+                      TABS.register("resources", () -> CreativeModeTab.builder()
+                              .title(Component.literal("Cosmic: Resources"))
+                              .icon(() -> new ItemStack(Items.IRON_INGOT))
+                              .build());
+
+              public static final RegistryObject<CreativeModeTab> MACHINES_TAB =
+                      TABS.register("machines", () -> CreativeModeTab.builder()
+                              .title(Component.literal("Cosmic: Machines"))
+                              .icon(() -> new ItemStack(Items.BLAST_FURNACE))
+                              .build());
+
+              public static final RegistryObject<CreativeModeTab> ROCKETRY_TAB =
+                      TABS.register("rocketry", () -> CreativeModeTab.builder()
+                              .title(Component.literal("Cosmic: Rocketry"))
+                              .icon(() -> new ItemStack(Items.FIREWORK_ROCKET))
+                              .build());
+
+              public static final RegistryObject<CreativeModeTab> STATIONS_TAB =
+                      TABS.register("stations", () -> CreativeModeTab.builder()
+                              .title(Component.literal("Cosmic: Stations"))
+                              .icon(() -> new ItemStack(Items.WHITE_CONCRETE))
+                              .build());
+
+              public static final RegistryObject<CreativeModeTab> GEAR_TAB =
+                      TABS.register("gear", () -> CreativeModeTab.builder()
+                              .title(Component.literal("Cosmic: Gear"))
+                              .icon(() -> new ItemStack(Items.IRON_CHESTPLATE))
+                              .build());
+
+              public static final RegistryObject<CreativeModeTab> FLUIDS_TAB =
+                      TABS.register("fluids", () -> CreativeModeTab.builder()
+                              .title(Component.literal("Cosmic: Fluids"))
+                              .icon(() -> new ItemStack(Items.WATER_BUCKET))
+                              .build());
+
+              public static void register(IEventBus bus) {
+                  TABS.register(bus);
+              }
+          }
+          EOF
+
+          echo "Java-файлы перезаписаны."
+
       - name: Set up JDK 17 (Temurin)
         uses: actions/setup-java@v4
         with:
@@ -204,7 +287,7 @@ jobs:
         run: chmod +x gradlew
 
       - name: Build with Gradle
-        run: ./gradlew build --no-daemon --stacktrace
+        run: ./gradlew build --no-daemon
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
